@@ -24,3 +24,7 @@ sbt-*.tgz
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated simulator artifacts
+outputs/
+sample-graph.json

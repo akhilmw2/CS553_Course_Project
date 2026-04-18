@@ -1,6 +1,6 @@
-# Quick Start Guide
+# Quick Start
 
-This guide will help you get started with the Distributed Algorithms Framework quickly.
+This guide covers the graph-driven simulator path that uses NetGameSim exports and runs the assigned Echo and Wave algorithms.
 
 ## Prerequisites
 
@@ -40,42 +40,55 @@ This guide will help you get started with the Distributed Algorithms Framework q
    sbt compile
    ```
 
-## Running Examples
+## Running the Graph-Driven Simulator
 
-### Echo Algorithm
-Demonstrates broadcast and convergcast operations:
-```bash
-sbt "runMain com.uic.cs553.distributed.examples.EchoAlgorithmExample"
+1. Make sure the NetGameSim submodule is present:
+   ```bash
+   git submodule update --init --recursive
+   ```
+
+2. In NetGameSim, configure JSON output:
+   ```hocon
+   NGSimulator.OutputGraphRepresentation.contentType = "json"
+   ```
+
+3. Generate a graph export with NetGameSim.
+
+4. Run the simulator against that export:
+   ```bash
+   sbt "runMain com.uic.cs553.distributed.cli.SimMain --graph /path/to/NetGameSimGraph.json --config conf/wave-directed.conf --out outputs/wave-run"
+   ```
+
+5. Optional: inject external messages from a file:
+   ```bash
+   sbt "runMain com.uic.cs553.distributed.cli.SimMain --graph /path/to/NetGameSimGraph.json --config conf/wave-directed.conf --inject /path/to/injections.txt"
+   ```
+
+6. Run Echo+Wave on a compatible bidirectional graph:
+   ```bash
+   sbt "runMain com.uic.cs553.distributed.cli.SimMain --graph examples/bidirectional-echo-graph.json --config conf/echo-wave-bidirectional.conf --out outputs/echo-wave-run"
+   ```
+
+7. Run interactive injection mode:
+   ```bash
+   sbt "runMain com.uic.cs553.distributed.cli.SimMain --graph examples/bidirectional-echo-graph.json --config conf/interactive-echo-wave.conf --interactive"
+   ```
+
+Interactive commands:
+
+```text
+inject 0 WORK bootstrap-job
+inject 1 PING hello-world
+quit
 ```
 
-**What you'll see:**
-- Node-1 initiates a wave to all nodes
-- Each node forwards the wave to neighbors
-- Nodes send echo messages back
-- Algorithm completes when initiator receives all echoes
+Injection file format:
 
-### Bully Leader Election
-Demonstrates leader election based on node priorities:
-```bash
-sbt "runMain com.uic.cs553.distributed.examples.BullyLeaderElectionExample"
+```text
+# delayMs nodeId kind payload
+0 0 WORK bootstrap-job
+1000 0 PING hello-world
 ```
-
-**What you'll see:**
-- All nodes start an election
-- Nodes with higher IDs suppress lower-ID nodes
-- The highest-ID node (node-7) becomes the leader
-- Victory message is broadcast
-
-### Token Ring
-Demonstrates mutual exclusion using token passing:
-```bash
-sbt "runMain com.uic.cs553.distributed.examples.TokenRingExample"
-```
-
-**What you'll see:**
-- Token circulates among nodes in the ring
-- Each node enters critical section when it has the token
-- Fair access - each node gets equal opportunities
 
 ## Running Tests
 
@@ -85,80 +98,39 @@ sbt test
 
 ## Development Workflow
 
-### 1. Understanding the Framework
+### 1. Understanding the Runtime
 
 Start by reading these files in order:
-1. `framework/DistributedNode.scala` - Base classes
-2. `algorithms/EchoAlgorithm.scala` - Simple example
-3. `examples/EchoAlgorithmExample.scala` - How to run it
+1. `runtime/SimulationBootstrap.scala` - Creates one Akka classic actor per graph node
+2. `runtime/NodeActor.scala` - Enforces edge labels, timers, input injection, and algorithm callbacks
+3. `runtime/DistributedAlgorithm.scala` - Plug-in interface for algorithms
+4. `runtime/EchoRuntimeAlgorithm.scala` - Assigned Echo algorithm
+5. `runtime/WaveRuntimeAlgorithm.scala` - Assigned Wave algorithm
 
-### 2. Creating Your Own Algorithm
+### 2. Adding A Runtime Algorithm
 
-Create a new file in `src/main/scala/com/uic/cs553/distributed/algorithms/`:
+Create a new file in `src/main/scala/com/uic/cs553/distributed/runtime/`:
 
 ```scala
-package com.uic.cs553.distributed.algorithms
+package com.uic.cs553.distributed.runtime
 
-import akka.actor.typed.{ActorRef, Behavior}
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
-import com.uic.cs553.distributed.framework._
+final class MyRuntimeAlgorithm(nodeId: Int, initiatorNode: Int) extends DistributedAlgorithm {
+  override val name: String = "my-runtime-algorithm"
 
-object MyAlgorithm {
-  
-  // Define your messages
-  sealed trait MyMessage extends DistributedMessage
-  case class CustomMessage(data: String, sender: ActorRef[DistributedMessage]) extends MyMessage
-  
-  // Create your node class
-  class MyNode(nodeId: String) extends BaseDistributedNode(nodeId) {
-    
-    override protected def onMessage(
-      ctx: ActorContext[DistributedMessage],
-      msg: DistributedMessage
-    ): Behavior[DistributedMessage] = {
-      msg match {
-        case CommonMessages.Start() =>
-          // Your initialization logic
-          ctx.log.info(s"[$nodeId] Starting my algorithm")
-          Behaviors.same
-        
-        case CustomMessage(data, sender) =>
-          // Handle your custom messages
-          ctx.log.info(s"[$nodeId] Received: $data")
-          Behaviors.same
-        
-        case _ =>
-          Behaviors.same
-      }
+  override def onStart(ctx: NodeContext): Unit =
+    if (nodeId == initiatorNode) {
+      ctx.sendToAll("CONTROL", "my-runtime-algorithm:start")
+      ctx.emitAlgorithmEvent(name, "started")
     }
-  }
 }
 ```
 
-### 3. Creating an Example Application
+Then register it in `DistributedAlgorithmFactory.scala` and enable it in config.
 
-Create a file in `src/main/scala/com/uic/cs553/distributed/examples/`:
-
-```scala
-package com.uic.cs553.distributed.examples
-
-import com.uic.cs553.distributed.algorithms.MyAlgorithm
-import com.uic.cs553.distributed.framework.ExperimentRunner
-
-object MyAlgorithmExample extends App {
-  ExperimentRunner.runExperiment(
-    algorithmName = "My Algorithm",
-    nodeCount = 5,
-    nodeFactory = (id: String) => new MyAlgorithm.MyNode(id),
-    durationSeconds = 30
-  )
-}
-```
-
-### 4. Run Your Algorithm
+### 3. Run The Simulator
 
 ```bash
-sbt "runMain com.uic.cs553.distributed.examples.MyAlgorithmExample"
+sbt "runMain com.uic.cs553.distributed.cli.SimMain --graph examples/bidirectional-echo-graph.json --config conf/echo-wave-bidirectional.conf --out outputs/echo-wave-run"
 ```
 
 ## Debugging Tips
@@ -178,7 +150,7 @@ sbt "runMain com.uic.cs553.distributed.examples.MyAlgorithmExample"
    sbt
    > compile
    > test
-   > runMain com.uic.cs553.distributed.examples.EchoAlgorithmExample
+   > runMain com.uic.cs553.distributed.cli.SimMain --graph examples/bidirectional-echo-graph.json --config conf/interactive-echo-wave.conf --interactive
    ```
 
 ## Common Issues
@@ -190,44 +162,15 @@ export SBT_OPTS="-Xmx2G -Xss2M"
 sbt compile
 ```
 
-### Compilation errors with sender references
-In Akka Typed, there's no `ctx.sender()`. Always pass sender as part of the message:
-```scala
-case class MyMessage(data: String, sender: ActorRef[DistributedMessage])
-```
-
 ### Actor not receiving messages
-Make sure to:
-1. Initialize nodes with `CommonMessages.Initialize(peers)`
-2. Start algorithm with `CommonMessages.Start()`
-3. Check that messages extend `DistributedMessage`
-
-## Next Steps
-
-1. **Study existing algorithms** in the `algorithms/` directory
-2. **Implement classic algorithms** like:
-   - Ricart-Agrawala mutual exclusion
-   - Chandy-Lamport snapshot
-   - Ring election
-   - Flood fill
-3. **Add features** like:
-   - Message delays
-   - Node failures
-   - Network partitions
-   - Visualization
-4. **Write tests** for your algorithms
+Check these first:
+1. The graph contains the expected node and edge.
+2. The edge label allows the message kind.
+3. The node is listed under `sim.initiators.inputs` for external injections.
+4. The algorithm is enabled under `sim.algorithms.enabled`.
 
 ## Resources
 
 - [Akka Documentation](https://doc.akka.io/docs/akka/current/)
 - [Distributed Algorithms by Nancy Lynch](https://mitpress.mit.edu/9780262011549/)
 - Course materials and lectures
-
-## Getting Help
-
-- Check the README.md for detailed documentation
-- Review example implementations
-- Look at test cases for usage patterns
-- Ask questions in course forums or office hours
-
-Happy coding! 🚀
